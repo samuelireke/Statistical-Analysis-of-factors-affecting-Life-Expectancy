@@ -1,0 +1,582 @@
+---
+title:  "WHO Life Expectancy Data Analysis Report" 
+author: "IREKE, Ukiwo Ireke"
+output: 
+  html_document: 
+    df_print: paged
+editor_options:
+  chunk_output_type: inline
+---
+
+
+# Introduction
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, error = FALSE, message = FALSE)
+#Loading libraries for this report
+library(tidyverse)
+library(VIM)
+library(mice)
+library(viridis)
+library(hrbrthemes)
+
+#LOADING DATASET################################################################################################
+
+df <- read_csv('life_expectancy.csv')
+
+
+```
+
+
+# Data Cleaning
+
+## Initial Exploratory Analysis
+
+First, we want to get a quick overview  of our dataset then have a summary statistics for initial insight of our data which is made up of `r nrow(df)` rows and `r ncol(df)` columns which are variables. 
+```{r echo=TRUE} 
+#Overview of dataset
+head(df, 5) # first 5 rows of data
+tail(df, 5) # last 5 rows
+
+#Display summary statistics#########
+summary(df)
+
+```
+
+The summary statistics interestingly we also revealed  the presence of missing values in most variables.As such needed to dataset needed to be explored further to better understand the percentage of the missing values per variable and their distributions before embarking on cleaning. This is summarized in figure 1 below;
+
+```{r } 
+#grouping all missing data into a new dataframe
+missing_df <- df %>%
+  summarize_all(funs(mean(is.na(.)*100)))
+```
+
+```{r echo=TRUE}
+#summary of missing data in percentages
+glimpse(missing_df)
+
+```
+
+```{r eval=TRUE}
+#Plot of Percentage of missing values within variables
+missing_df %>%
+  pivot_longer(country :schooling, names_to = "variable", 
+               values_to = "pct") %>%
+  filter(pct > 0) %>%
+  filter(!str_detect(variable, "use_")) %>%
+  ggplot(aes(x=reorder(variable, pct), y=pct)) +
+   labs(title = "Variables against percentage of missingness in data, pct, %",
+        tag = "Figure 1",
+        x = "variables",
+       y = "pct ,%")+
+  theme_classic()+
+  coord_flip( ) +
+  geom_col() +
+  geom_text(aes(label=sprintf("%0.2f", round(pct, digits = 2))), position=position_dodge(width=0.9), hjust=-0.10)
+
+```
+
+Figure 1 above revealed population, hepatitis_ b and gdp columns to contains a very high percentage of missing values of over 15% which may introduce some bias in our data if these rows were completely dropped. Furthermore, exploring  the distribution of these variables amongst status showed:
+```{r eval=TRUE}
+missing_data <- df %>%
+  select(,-country) %>%
+  group_by(status) %>%
+  summarise_all(funs(mean(is.na(.)*100)))
+
+#View Missing data
+missing_data
+
+```
+This shows all the missing values for life expectancy, adult_mortality, bmi, polio and diphtheria were only among the developing countries.
+#Checking why and which countires have null value life_expectancy
+
+```{r eval= TRUE}
+#checking missing values for life_expectancy
+data_1 <- df %>%
+  filter (is.na(life_expectancy))
+
+data_1
+```
+We see that all the countries with missing life_expectancy values had missing adult_mortality values as well. Thus we dropping this observations will be appropriate and have less impact on our entire dataset.
+
+```{r eval=FALSE}
+df <- df %>%
+  drop_na(life_expectancy:adult_mortality)
+
+head(df)
+```
+
+```{r eval= TRUE}
+#checking missing values for polio
+data_3 <- df %>%
+  filter (is.na(polio))
+
+head(data_3)
+```
+
+Also, we see that all the countries with missing polio values had missing diphtheria values as well. Thus we dropping these observations too.
+
+```{r eval=FALSE}
+df <- df %>%
+  drop_na(polio)
+
+```
+
+```{r}
+#Taking a look at the missing values left, we have
+df %>%
+  summarise_all(funs(sum(is.na(.))))
+ 
+```
+```{r eval=TRUE}
+ #Investigating missing values in population by country
+df %>%
+group_by(country) %>%
+  summarise(count = sum(is.na(population))) %>%
+  arrange(desc(count))
+
+```
+
+Ths clearly shows the population variable of our data has lots of observations with no population entry. Using imputation will tremendously introduce bias to our result we have no single entry for them. Also since population growth occurs each year, it will be inapproprate to use mean or median substituions. Thus we will drop every entry with no population entry.
+
+```{r eval=FALSE}
+df <- df %>%
+  drop_na(population)
+
+```
+
+
+```{r}
+#Taking a look at the missing values left, we have
+df %>%
+  summarise_all(funs(sum(is.na(.))))
+```
+Due to the high missingness left in hepatitis_b we will assume it has a low impact on life_expectancy, thus this column will be dropped.
+
+```{r eval=FALSE}
+df <- df %>%
+  select(,-hepatitis_b)
+
+```
+
+
+
+```{r eval=TRUE}
+ #Investigating missing values in bmi by country
+df %>%
+group_by(country) %>%
+  filter(is.na(bmi))
+
+```
+We find south sudan and sudan have not entries as such these rows will be drop these entries too.
+```{r eval=FALSE}
+df <- df %>%
+  drop_na(bmi)
+
+```
+
+```{r eval=TRUE}
+ #Investigating missing values in gdp by country
+df %>%
+group_by(country) %>%
+  filter(is.na(gdp))
+
+```
+
+```{r eval=FALSE}
+#Dropping gdp rows
+df <- df %>%
+  drop_na(gdp)
+
+```
+
+```{r eval=TRUE}
+ #Investigating rest of missing values in population by country
+df %>%
+group_by(country) %>%
+  summarise(count_alcohol = sum(is.na(alcohol)), count_total_exp = sum(is.na(total_expenditure))) 
+
+```
+
+
+
+We observe a clear random distribution of missingness. As such these variables cn be imputed using the MICE package.
+
+
+```{r}
+
+###Multiple Imputation
+impute<-mice(df[,0:19], m=4, method='cart', seed=500)
+head(impute$imp$alcohol)
+summary(df$alcohol)
+
+#We choose the third imputation
+
+clean_df <- complete(impute,3)
+
+xyplot(impute, alcohol ~ life_expectancy | .imp, pch = 20, cex = 1.4)
+
+```
+The red plots show the imputed points while the blue point are the original datapoints. Thus showing our imputation did a good job.
+
+
+# Exploratory Data Analysis
+```{r}
+#checking the missing values
+sum(is.na(clean_df))
+```
+
+This shows the data have been clean of missing value. Visualising the distributions within variables is summarised in the plot below:
+
+
+```{r}
+#Summary of cleaned data
+summary(clean_df)
+```
+
+```{r}
+#for alcohol vs life_expectancy
+clean_df %>%
+   ggplot( aes(x=alcohol, y=life_expectancy)) +
+  geom_point(aes (colour = status))
+
+
+```
+```{r}
+#for percentage_expenditure vs life_expectancy
+clean_df %>%
+   ggplot( aes(x=percentage_expenditure, y=life_expectancy)) +
+  geom_point(aes (colour = status))
+
+
+```
+## Univariate Analysis
+```{r}
+#Life_Expectancy Distribution Plot
+clean_df  %>%
+ggplot(aes(x = life_expectancy, fill = status, colour = status)) + 
+    geom_histogram(aes(y=..density..),position= "identity", alpha = 0.5)+
+  geom_density(alpha=0.2)+
+  ggtitle("Life Expectancy Distribution Plot")
+
+
+```
+
+
+
+```{r}
+#Adult Mortality Distribution Plot
+clean_df  %>%
+ggplot(aes(x = adult_mortality, fill = status, colour = status)) + 
+    geom_histogram(aes(y=..density..),position= "identity", alpha = 0.5)+
+  geom_density(alpha=0.2)+
+  ggtitle("Adult Mortality Distribution Plot")
+```
+
+
+```{r}
+#Schooling Distribution Plot
+clean_df  %>%
+ggplot(aes(x = schooling, fill = status, colour = status)) + 
+    geom_histogram(aes(y=..density..),position= "identity", alpha = 0.5)+
+  geom_density(alpha=0.2)+
+  ggtitle("Schooling Distribution Plot")
+```
+
+```{r}
+
+```
+
+
+
+```{r}
+#Alcohol Distribution Plot
+clean_df  %>%
+ggplot(aes(x = alcohol, fill = status, colour = status)) + 
+    geom_histogram(position= "identity", alpha = 0.5)+
+  ggtitle("Alcohol Distribution Plot")
+```
+
+
+```{r}
+#BMI Distribution Plot
+clean_df  %>%
+ggplot(aes(x = alcohol, fill = status, colour = status)) + 
+    geom_histogram(position= "identity", alpha = 0.5)+
+  ggtitle("BMI Distribution Plot")
+```
+These analysis show 
+1. The distributions of Total.expenditure, Income.composition.of.resources and Schooling are normally distributed.
+2. Alcohol ,infant.deaths, under.five.deaths, percentage.expenditure, Measles,Adult.Mortality, thinness 1-19 years, \n thinness 5-9 years, and HIV.AIDS are distributed with skewness at right.
+3. Hepatitis.B, Polio, Diphtheria are distributed with skewness at left.
+4. BMI has bimodal distribution.
+
+
+```{r}
+clean_df %>%
+  arrange(desc(population)) %>%
+ggplot(aes(x=infant_deaths, y=life_expectancy, size = population, fill = status))+
+  geom_point(colour="white", shape=21, alpha=.55)+
+  scale_size(range = c(.1, 24), name="population (M)") +
+    #scale_fill_viridis(discrete=TRUE, guide=FALSE, option="A") +
+    theme_ipsum() +
+    theme(legend.position="bottom") +
+  labs(title="Infant deaths by life expectancy",
+    y = "Life Expectancy",
+    x = "Infant Deaths per 1000 population") +
+    theme(legend.position = "none")
+  
+ 
+
+
+```
+
+# Statistical Tests
+```{r}
+#Summary of cleaned data
+summary(clean_df)
+```
+## Two sample t-test
+
+Conducting a hypothesis test to investigate variable which affect life_expectancy is as follows:
+
+### Life_expectancy vs adult_mortality
+```{r}
+#H0 - (Null hypothesis): There is no difference between average life_expectancy and adult_mortality average
+#H1: There is a difference between average life_expectancy and adult_mortality average
+t.test(clean_df$life_expectancy,clean_df$adult_mortality)
+
+```
+With a p-value less than 0.05 and the mean estimates closely matched with the summary data, we can reject the null hypothesis.Also the 95% confidence interval also confirms this.
+
+
+### Life_expectancy vs infant_deaths
+```{r}
+#H0 - (Null hypothesis): There is no difference between average life_expectancy and infant_deaths average
+#H1: There is a difference between average life_expectancy and adult_mortality average
+t.test(clean_df$life_expectancy,clean_df$schooling) 
+
+```
+Here we also reject the null hypothesis since p-value is smaller than 0.05.
+
+A t-test on the other variable showed similar low p-values which enabled us to reject the null hypothesis. To further test for the significance of these parameters we applied Multivariate Analysis.
+
+# Multivariate Analysis
+
+Using Principal Component Analysis to Undersatnd these data points
+
+```{r}
+pca <- clean_df %>%
+  select(adult_mortality:schooling) %>%
+prcomp(scale=TRUE) # scaling the variables to have a unit variance before making our analysis                                             since most of our variables have different variance.
+  
+pca$rotation
+
+#loadings
+loadings <-
+  pca$rotation %>%
+as.data.frame()%>%
+  tibble::rownames_to_column('variables')
+  
+#obtaining the scores
+
+scores <-
+  pca$x %>%
+  as.data.frame()
+
+
+```
+
+Analysing the Scree plot to obtain a cut off number of principal components showed using 3 components was appropriate. The proportion of variance of each pca justifies this choice with PC4 less than 0.1.
+```{r eval = TRUE}
+plot(pca, type = "line", main = "Scree Plot")
+
+summary(pca) 
+```
+```{r}
+
+ggplot(loadings) +
+  aes(y = PC1, x = variables) +
+  geom_col() +
+  coord_flip()+
+  ggtitle("PC1")
+```
+This shows the original variance in the data. Here we can under_five_deaths, adult_mortality, infant_mortality have high negatives and schooling have high positive variances and low population. Can be an indication of strong impact on life_expectancy. Looks like this is a developed world nation where population is low, with high rate of education and adult_mortality
+
+
+
+```{r}
+
+ggplot(loadings) +
+  aes(y = PC2, x = variables) +
+  geom_col() +
+  coord_flip()+
+  ggtitle("PC2")
+  
+```
+Here we see under_five_deaths, infant_deaths and population strongly correlated but hepatitis_b may not be correlated. This might be in a developing nation where population may be high but less healthcare infracstucture may lead to high infant mortality.
+
+
+
+```{r}
+
+ggplot(loadings) +
+  aes(y = PC3, x = variables) +
+  geom_col() +
+  coord_flip()+
+  ggtitle("PC3")
+  
+```
+This is clearly a developed world nation. Where polio and hepatitis_b vaccination is high, percentage government expenditure on health also high with other variables low.
+### Using PCA to Understand the Data points
+
+```{r}
+pca_df <- 
+clean_df %>%
+  cbind(scores)
+
+#Plotting PC1 against PC2 to understand the plot
+
+ggplot(pca_df) +
+  aes(x =
+PC1, y = PC2, label = country, colour = status) +
+  geom_text()
+  
+
+```
+
+This showed India, Nigeria an Democratic Republic of Congo scored high in the second principal component. These nations all being Developing nations confirm the inference we made from PC2.
+
+```{r}
+
+#Plotting PC1 against PC3 to understand the plot
+
+ggplot(pca_df) +
+  aes(x =
+PC1, y = PC3, label = country, colour = status, label = country ) +
+  geom_text()
+  
+
+```
+Luxembourg, Norway all scored high for PC3 clearly confirming our intuitions of PC3 since they are Developed worlld countries and have high life expectancies.
+
+# Modelling
+
+We will be using the  Backward Selection with Adjusted R - square technique to build a conclusive model.
+
+### Backward Selection with Adjusted R - square technique.
+```{r eval = TRUE}
+
+best_model <-
+  lm(life_expectancy ~ . - country - year, data= clean_df) # country, year removed to focus more on status and other variables
+options(scipen=999)
+summary(best_model)
+
+
+
+
+```
+
+```{r echo=TRUE}
+#first model
+
+summary (lm(life_expectancy ~ . -status - country - year ,data = clean_df))$adj.r.squared
+summary(lm(life_expectancy ~ . -infant_deaths - country - year ,data = clean_df))$adj.r.squared
+summary (lm(life_expectancy ~ .- adult_mortality - country - year ,data = clean_df))$adj.r.squared
+summary (lm(life_expectancy ~ . - alcohol - country - year ,data = clean_df))$adj.r.squared
+summary (lm(life_expectancy ~ . -percentage_expenditure - country - year ,data = clean_df))$adj.r.squared
+summary (lm(life_expectancy ~ . -hepatitis_b - country - year ,data = clean_df))$adj.r.squared
+summary (lm(life_expectancy ~  . -measles - country - year ,data = clean_df))$adj.r.squared
+summary (lm(life_expectancy ~ . - bmi - country - year ,data = clean_df))$adj.r.squared
+summary (lm(life_expectancy ~ . - under_five_deaths - country - year ,data = clean_df))$adj.r.squared
+summary (lm(life_expectancy ~ . - polio - country - year ,data = clean_df))$adj.r.squared
+summary (lm(life_expectancy ~ . - total_expenditure - country - year ,data = clean_df))$adj.r.squared
+summary (lm(life_expectancy ~ . - diphtheria - country - year ,data = clean_df))$adj.r.squared
+summary (lm(life_expectancy ~ . - hiv_aids - country - year ,data = clean_df))$adj.r.squared
+summary (lm(life_expectancy ~ . - gdp - country - year ,data = clean_df)) $adj.r.squared
+summary (lm(life_expectancy ~ . - population - country - year ,data = clean_df))$adj.r.squared
+summary (lm(life_expectancy ~ . - schooling - country - year ,data = clean_df))$adj.r.squared
+
+```
+The best model out of these is the one where hepatitis_b is removed but since its adjusted R-squared score is lower than that of the best model. We keep our best model.
+
+#### Checking assumptions
+1. Each Variable is linearly related to the outcome.
+```{r}
+ggplot(clean_df) +
+  aes(x = schooling, y = life_expectancy) +
+  geom_point() +
+  geom_smooth(method = 'lm', se = FALSE)
+
+```
+It's clear from the scatter-plot and the residual plot that there is a linear trend here.
+
+2. Normality of residuals
+
+
+```{r}
+clean_df <- mutate(clean_df, residuals = residuals(best_model))
+
+ggplot(clean_df) +
+  aes(x = residuals) +
+  geom_histogram()
+
+```
+We see some outliers, but they don't seem to be affecting the trend line strongly.
+
+3. Constant variance of residuals
+
+```{r}
+#alcohol
+ggplot(clean_df) +
+  aes(x =alcohol , y = residuals) +
+  geom_jitter(height = 0) +
+  geom_hline(yintercept = 0)
+
+
+```
+```{r}
+#bmi
+ggplot(clean_df) +
+  aes(x =bmi , y = residuals) +
+  geom_jitter(height = 0) +
+  geom_hline(yintercept = 0)
+
+
+```
+
+```{r}
+#bmi
+ggplot(clean_df) +
+  aes(x = total_expenditure , y = residuals) +
+  geom_jitter(height = 0) +
+  geom_hline(yintercept = 0)
+
+
+
+```
+It is cllearly evident that there does seem to be more variance for lower levels of speediness
+
+4. Residuals are independent
+```{r}
+clean_df <- mutate(clean_df, order = row_number())
+
+ggplot(clean_df) +
+  aes(x = order, y = residuals) +
+  geom_point()
+
+
+
+```
+There is no obvious order to the observations so it's fair to assume they will be independent.
+
+
+# Conclusion
+
+In conclusion we have shown that all the variable have an effect on the life_expectancy of a nation. But pca further revealed that, these effect will vary depending on the development with the nation. But major drivers are variables like with a normal distribution such as schooling which is linked with development as well.
+
+
+
+
+
+
